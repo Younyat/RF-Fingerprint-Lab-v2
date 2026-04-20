@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import FastAPI
+from fastapi import WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config.settings import settings
+from app.infrastructure.di.container import ApplicationContainer
+from app.infrastructure.web.api.routes.demodulation_routes import build_demodulation_router
+from app.infrastructure.web.api.routes.device_routes import build_device_router
+from app.infrastructure.web.api.routes.marker_routes import build_marker_router
+from app.infrastructure.web.api.routes.preset_routes import build_preset_router
+from app.infrastructure.web.api.routes.recording_routes import build_recording_router
+from app.infrastructure.web.api.routes.session_routes import build_session_router
+from app.infrastructure.web.api.routes.spectrum_routes import build_spectrum_router
+
+
+logging.basicConfig(
+    level=getattr(logging, settings.logging.level.upper(), logging.INFO),
+    format=settings.logging.format,
+)
+
+container = ApplicationContainer.build()
+
+app = FastAPI(
+    title=settings.app.app_name,
+    version=settings.app.app_version,
+    debug=settings.app.debug,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.api.cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(build_device_router(container.device_controller), prefix=settings.api.base_path)
+app.include_router(build_spectrum_router(container.spectrum_controller), prefix=settings.api.base_path)
+app.include_router(build_marker_router(container.marker_controller), prefix=settings.api.base_path)
+app.include_router(build_recording_router(container.recording_controller), prefix=settings.api.base_path)
+app.include_router(build_demodulation_router(container.demodulation_controller), prefix=settings.api.base_path)
+app.include_router(build_preset_router(container.preset_controller), prefix=settings.api.base_path)
+app.include_router(
+    build_session_router(
+        create_session_use_case=container.create_session_use_case,
+        get_active_device_state=container.device_manager.get_device_state,
+    ),
+    prefix=settings.api.base_path,
+)
+
+
+@app.get("/")
+def root() -> dict:
+    return {
+        "app_name": settings.app.app_name,
+        "version": settings.app.app_version,
+        "status": "ok",
+    }
+
+
+@app.websocket("/socket.io/")
+async def legacy_socket_io_sink(websocket: WebSocket) -> None:
+    await websocket.accept()
+    await websocket.close(code=1000)

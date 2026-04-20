@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from app.config.settings import settings as app_settings
+
+
+class RealSpectrumStream:
+    def __init__(self) -> None:
+        self._process: subprocess.Popen | None = None
+        self._latest_frame: dict[str, Any] | None = None
+        self._last_error: str | None = None
+        self._config_key: tuple | None = None
+        self._lock = threading.Lock()
+
+    def get_latest(self, analyzer_settings) -> dict:
+        self.ensure_started(analyzer_settings)
+        with self._lock:
+            if self._latest_frame is not None:
+                return dict(self._latest_frame)
+            return {
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "center_frequency_hz": analyzer_settings.frequency.center_frequency_hz,
+                "span_hz": analyzer_settings.frequency.sample_rate_hz,
+                "frequencies_hz": [],
+                "levels_db": [],
+                "source": "real_sdr_pending",
+                "error": self._last_error or "Waiting for first real SDR frame",
+            }
+
+    def ensure_started(self, analyzer_settings) -> None:
+        config_key = self._make_config_key(analyzer_settings)
+        if self._process is not None and self._process.poll() is None and self._config_key == config_key:
+            return
+
+        self.stop()
+        self._config_key = config_key
+        self._latest_frame = None
+        self._last_error = None
+
+        python_exe = os.environ.get("RADIOCONDA_PYTHON", r"C:\Users\Usuario\radioconda\python.exe")
+        backend_root = app_settings.storage.app_root.parent
+        script_path = backend_root / "tools" / "spectrum_stream_worker.py"
+
+        if not Path(python_exe).exists():
+            self._last_error = f"RadioConda Python not found: {python_exe}"
+            return
+        if not script_path.exists():
+            self._last_error = f"Spectrum stream worker not found: {script_path}"
+            return
+
+        command = [
+            python_exe,
+            "-u",
+            str(script_path),
+            "--freq",
+            f"{analyzer_settings.frequency.center_frequency_hz / 1e6:.9f}",
+            "--sample-rate",
+            str(float(analyzer_settings.frequency.sample_rate_hz)),
+            "--gain",
+            str(float(analyzer_settings.gain.gain_db)),
+            "--antenna",
+            app_settings.default_device.antenna,
+            "--device-addr",
+            app_settings.default_device.device_args,
+            "--fft-size",
+            str(int(analyzer_settings.resolution.fft_size)),
+            "--fps",
+            os.environ.get("REAL_SDR_FPS", "5"),
+        ]
+
+        try:
+            self._process = subprocess.Popen(
+                command,
+                cwd=str(backend_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except Exception as exc:
+            self._last_error = str(exc)
+            self._process = None
+            return
+
+        threading.Thread(target=self._read_stdout, daemon=True).start()
+        threading.Thread(target=self._read_stderr, daemon=True).start()
+
+    def stop(self) -> None:
+        if self._process is not None and self._process.poll() is None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+        self._process = None
+
+    def _read_stdout(self) -> None:
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                frame = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            with self._lock:
+                if frame.get("source") == "real_sdr_error":
+                    self._last_error = frame.get("error", "Unknown SDR error")
+                else:
+                    self._latest_frame = frame
+                    self._last_error = None
+
+    def _read_stderr(self) -> None:
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            line = line.strip()
+            if line:
+                with self._lock:
+                    self._last_error = line
+
+    def _make_config_key(self, analyzer_settings) -> tuple:
+        return (
+            float(analyzer_settings.frequency.center_frequency_hz),
+            float(analyzer_settings.frequency.sample_rate_hz),
+            float(analyzer_settings.gain.gain_db),
+            int(analyzer_settings.resolution.fft_size),
+            app_settings.default_device.antenna,
+            app_settings.default_device.device_args,
+        )
+
+
+real_spectrum_stream = RealSpectrumStream()

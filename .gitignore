@@ -8,3 +8,13 @@ dist/
 *.cfile
 *.wav
 *.jsonl
+backend/venv/
+
+# Extra virtual environments
+*/.venv/
+*/venv/
+*/env/
+*/ENV/
+*/myenv/
+*/virtualenv/
+*/.virtualenv/

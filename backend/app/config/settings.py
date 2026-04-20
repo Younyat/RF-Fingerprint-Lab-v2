@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import os
+from pathlib import Path
+from typing import List
+
+
+@dataclass(slots=True, frozen=True)
+class AppSettings:
+    app_name: str = "Spectrum Lab"
+    app_version: str = "0.1.0"
+    debug: bool = True
+
+
+@dataclass(slots=True, frozen=True)
+class ApiSettings:
+    host: str = "127.0.0.1"
+    port: int = 8000
+    base_path: str = "/api"
+    ws_base_path: str = "/ws"
+    cors_allowed_origins: List[str] = field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
+
+
+@dataclass(slots=True, frozen=True)
+class StorageSettings:
+    project_root: Path
+    backend_root: Path
+    app_root: Path
+    infrastructure_root: Path
+    persistence_root: Path
+    storage_root: Path
+    recordings_dir: Path
+    sessions_dir: Path
+    presets_dir: Path
+    temp_dir: Path
+
+
+@dataclass(slots=True, frozen=True)
+class DefaultDeviceSettings:
+    driver: str = "uhd"
+    device_args: str = ""
+    antenna: str = "RX2"
+    channel_index: int = 0
+    sample_rate_hz: float = 2_000_000.0
+    center_frequency_hz: float = 89_400_000.0
+    span_hz: float = 2_000_000.0
+    gain_db: float = 20.0
+    agc_enabled: bool = False
+    ppm_correction: float = 0.0
+
+
+@dataclass(slots=True, frozen=True)
+class DefaultSpectrumSettings:
+    fft_size: int = 4096
+    fft_window: str = "hann"
+    trace_points: int = 4096
+    reference_level_db: float = 10.0
+    min_level_db: float = -140.0
+    max_level_db: float = 10.0
+    averaging_enabled: bool = False
+    averaging_factor: float = 0.2
+    detector_mode: str = "sample"
+    max_hold_enabled: bool = False
+    min_hold_enabled: bool = False
+    smoothing_enabled: bool = False
+    smoothing_factor: float = 0.15
+    rbw_hz: float = 10_000.0
+    vbw_hz: float = 3_000.0
+    noise_floor_offset_db: float = 0.0
+
+
+@dataclass(slots=True, frozen=True)
+class DefaultWaterfallSettings:
+    enabled: bool = True
+    history_size: int = 400
+    min_level_db: float = -140.0
+    max_level_db: float = 10.0
+    color_map: str = "turbo"
+
+
+@dataclass(slots=True, frozen=True)
+class DefaultRecordingSettings:
+    iq_enabled: bool = True
+    audio_enabled: bool = False
+    iq_format: str = "complex64_fc32_interleaved"
+    audio_format: str = "wav_pcm16_mono"
+    default_duration_seconds: float = 10.0
+
+
+@dataclass(slots=True, frozen=True)
+class DefaultDemodulationSettings:
+    mode: str = "off"
+    audio_sample_rate_hz: int = 48_000
+    fm_deviation_hz: float = 75_000.0
+    am_cutoff_hz: float = 10_000.0
+    squelch_enabled: bool = False
+    squelch_threshold_db: float = -60.0
+
+
+@dataclass(slots=True, frozen=True)
+class LoggingSettings:
+    level: str = "INFO"
+    format: str = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
+
+@dataclass(slots=True, frozen=True)
+class Settings:
+    app: AppSettings
+    api: ApiSettings
+    storage: StorageSettings
+    default_device: DefaultDeviceSettings
+    default_spectrum: DefaultSpectrumSettings
+    default_waterfall: DefaultWaterfallSettings
+    default_recording: DefaultRecordingSettings
+    default_demodulation: DefaultDemodulationSettings
+    logging: LoggingSettings
+
+
+def _build_storage_settings() -> StorageSettings:
+    app_root = Path(__file__).resolve().parents[1]
+    backend_root = app_root.parents[1]
+    project_root = backend_root.parent
+    infrastructure_root = app_root / "infrastructure"
+    persistence_root = infrastructure_root / "persistence"
+    storage_root = persistence_root / "storage"
+
+    recordings_dir = storage_root / "recordings"
+    sessions_dir = storage_root / "sessions"
+    presets_dir = storage_root / "presets"
+    temp_dir = storage_root / "temp"
+
+    for path in (
+        storage_root,
+        recordings_dir,
+        sessions_dir,
+        presets_dir,
+        temp_dir,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+    return StorageSettings(
+        project_root=project_root,
+        backend_root=backend_root,
+        app_root=app_root,
+        infrastructure_root=infrastructure_root,
+        persistence_root=persistence_root,
+        storage_root=storage_root,
+        recordings_dir=recordings_dir,
+        sessions_dir=sessions_dir,
+        presets_dir=presets_dir,
+        temp_dir=temp_dir,
+    )
+
+
+def build_settings() -> Settings:
+    return Settings(
+        app=AppSettings(),
+        api=ApiSettings(),
+        storage=_build_storage_settings(),
+        default_device=DefaultDeviceSettings(
+            center_frequency_hz=float(os.environ.get("DEFAULT_CENTER_FREQUENCY_HZ", "89400000")),
+            sample_rate_hz=float(os.environ.get("DEFAULT_SAMPLE_RATE_HZ", "2000000")),
+            gain_db=float(os.environ.get("DEFAULT_GAIN_DB", "20")),
+            antenna=os.environ.get("DEFAULT_ANTENNA", "RX2"),
+            device_args=os.environ.get("UHD_DEVICE_ARGS", ""),
+        ),
+        default_spectrum=DefaultSpectrumSettings(),
+        default_waterfall=DefaultWaterfallSettings(),
+        default_recording=DefaultRecordingSettings(),
+        default_demodulation=DefaultDemodulationSettings(),
+        logging=LoggingSettings(),
+    )
+
+
+settings = build_settings()
